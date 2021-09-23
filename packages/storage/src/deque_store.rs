@@ -201,37 +201,35 @@ where
         }
     }
 
-    /// Remove an element from the collection at the specified position.
-    ///
-    /// Removing an element from the head (first) or tail (last) has a constant cost.
-    /// The cost of removing from the middle will depend on the proximity to the head or tail.
-    /// In that case, all the elements between the closest tip of the collection (head or tail)
-    /// and the specified position will be shifted in storage.
-    ///
-    /// Removing an element from the middle of the collection
-    /// has the worst runtime and gas cost.
+    /// Remove element at position provided
     pub fn remove(&mut self, pos: u32) -> StdResult<T> {
-        if pos >= self.len {
-            return Err(StdError::generic_err("DequeStorage access out of bounds"));
-        }
-        let item = self.get_at_unchecked(pos);
-        let to_tail = self.len - pos;
-        if to_tail < pos {
-            // closer to the tail
-            for i in pos..self.len - 1 {
-                let element_to_shift = self.get_at_unchecked(i + 1)?;
-                self.set_at_unchecked(i, &element_to_shift)?;
+        if pos == 0 {
+            // if remove the first element
+            self.pop_front()
+        } else if pos == self.len - 1 {
+            // if remove the last element
+            self.pop_back()
+        } else if pos > 0 && pos < self.len - 1 {
+            // if remove element from the middle
+            let item = self.get_at_unchecked(pos);
+            let to_tail = self.len - pos;
+            if to_tail < pos {
+                // closer to the tail
+                for i in (pos..self.len - 1) {
+                    self.set_at_unchecked(i, &self.get_at_unchecked(i + 1).unwrap());
+                }
+            } else {
+                // closer to the head
+                for i in (0..pos).rev() {
+                    self.set_at_unchecked(i + 1, &self.get_at_unchecked(i).unwrap());
+                }
+                self.set_offset(self.off.overflowing_add(1).0);
             }
+            self.set_length(self.len - 1);
+            item
         } else {
-            // closer to the head
-            for i in (0..pos).rev() {
-                let element_to_shift = self.get_at_unchecked(i)?;
-                self.set_at_unchecked(i + 1, &element_to_shift)?;
-            }
-            self.set_offset(self.off.overflowing_add(1).0);
+            Err(StdError::generic_err("DequeStorage access out of bounds"))
         }
-        self.set_length(self.len - 1);
-        item
     }
 
     /// Set the length of the collection
@@ -534,14 +532,59 @@ mod tests {
     }
 
     #[test]
+    fn test_removes() -> StdResult<()> {
+        let mut storage = MockStorage::new();
+        let mut deque_store = DequeStoreMut::attach_or_create(&mut storage)?;
+        deque_store.push_front(&2)?;
+        deque_store.push_back(&3)?;
+        deque_store.push_back(&4)?;
+        deque_store.push_back(&5)?;
+        deque_store.push_back(&6)?;
+        deque_store.push_front(&1)?;
+
+        assert_eq!(deque_store.remove(3), Ok(4));
+        assert_eq!(deque_store.get_at(4), Ok(6));
+        assert_eq!(deque_store.get_at(3), Ok(5));
+        assert_eq!(deque_store.get_at(2), Ok(3));
+        assert_eq!(deque_store.get_at(1), Ok(2));
+        assert_eq!(deque_store.get_at(0), Ok(1));
+
+        assert_eq!(deque_store.remove(1), Ok(2));
+        assert_eq!(deque_store.get_at(3), Ok(6));
+        assert_eq!(deque_store.get_at(2), Ok(5));
+        assert_eq!(deque_store.get_at(1), Ok(3));
+        assert_eq!(deque_store.get_at(0), Ok(1));
+
+        assert_eq!(deque_store.remove(2), Ok(5));
+        assert_eq!(deque_store.get_at(2), Ok(6));
+        assert_eq!(deque_store.get_at(1), Ok(3));
+        assert_eq!(deque_store.get_at(0), Ok(1));
+
+        assert_eq!(deque_store.remove(1), Ok(3));
+        assert_eq!(deque_store.get_at(1), Ok(6));
+        assert_eq!(deque_store.get_at(0), Ok(1));
+
+        assert_eq!(deque_store.remove(1), Ok(6));
+        assert_eq!(deque_store.get_at(0), Ok(1));
+
+        assert_eq!(deque_store.remove(0), Ok(1));
+
+        assert!(deque_store.remove(0).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn test_iterator() -> StdResult<()> {
         let mut storage = MockStorage::new();
         let mut deque_store = DequeStoreMut::attach_or_create(&mut storage)?;
 
         deque_store.push_front(&2143)?;
+        deque_store.push_back(&3333)?;
         deque_store.push_back(&3412)?;
         deque_store.push_front(&1234)?;
         deque_store.push_back(&4321)?;
+
+        deque_store.remove(2)?;
 
         // iterate twice to make sure nothing changed
         let mut iter = deque_store.iter();
@@ -573,8 +616,11 @@ mod tests {
         let mut deque_store = DequeStoreMut::attach_or_create(&mut storage)?;
         deque_store.push_front(&2143)?;
         deque_store.push_back(&3412)?;
+        deque_store.push_back(&3333)?;
         deque_store.push_front(&1234)?;
         deque_store.push_back(&4321)?;
+
+        deque_store.remove(3)?;
 
         let mut iter = deque_store.iter().rev();
         assert_eq!(iter.next(), Some(Ok(4321)));
