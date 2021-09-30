@@ -28,7 +28,7 @@ where
     item_type: PhantomData<*const T>,
     serialization_type: PhantomData<*const Ser>,
     len: u32,
-    off: u32
+    off: u32,
 }
 
 impl<'a, T, S> DequeStoreMut<'a, T, S, Bincode2>
@@ -66,13 +66,13 @@ where
     pub fn attach_or_create_with_serialization(storage: &'a mut S, _ser: Ser) -> StdResult<Self> {
         if let Some(len_vec) = storage.get(LEN_KEY) {
             let off_vec = storage.get(OFFSET_KEY).unwrap();
-            Self::new(storage, &len_vec,&off_vec)
+            Self::new(storage, &len_vec, &off_vec)
         } else {
             let len_vec = 0_u32.to_be_bytes();
             storage.set(LEN_KEY, &len_vec);
-            let off_vec= 0_u32.to_be_bytes();
+            let off_vec = 0_u32.to_be_bytes();
             storage.set(OFFSET_KEY, &off_vec);
-            Self::new(storage, &len_vec,&off_vec)
+            Self::new(storage, &len_vec, &off_vec)
         }
     }
 
@@ -102,7 +102,7 @@ where
             item_type: PhantomData,
             serialization_type: PhantomData,
             len,
-            off
+            off,
         })
     }
 
@@ -152,7 +152,10 @@ where
 
     fn set_at_unchecked(&mut self, pos: u32, item: &T) -> StdResult<()> {
         let serialized = Ser::serialize(item)?;
-        self.storage.set(&(pos.overflowing_add(self.off).0).to_be_bytes(), &serialized);
+        self.storage.set(
+            &(pos.overflowing_add(self.off).0).to_be_bytes(),
+            &serialized,
+        );
         Ok(())
     }
 
@@ -164,7 +167,7 @@ where
         self.set_length(self.len + 1);
         Ok(())
     }
-    
+
     /// Add an item to the begining of the collection.
     ///
     /// This operation has a constant cost.
@@ -198,6 +201,39 @@ where
         }
     }
 
+    /// Remove an element from the collection at the specified position.
+    ///
+    /// Removing an element from the head (first) or tail (last) has a constant cost.
+    /// The cost of removing from the middle will depend on the proximity to the head or tail.
+    /// In that case, all the elements between the closest tip of the collection (head or tail)
+    /// and the specified position will be shifted in storage.
+    ///
+    /// Removing an element from the middle of the collection
+    /// has the worst runtime and gas cost.
+    pub fn remove(&mut self, pos: u32) -> StdResult<T> {
+        if pos >= self.len {
+            return Err(StdError::generic_err("DequeStorage access out of bounds"));
+        }
+        let item = self.get_at_unchecked(pos);
+        let to_tail = self.len - pos;
+        if to_tail < pos {
+            // closer to the tail
+            for i in pos..self.len - 1 {
+                let element_to_shift = self.get_at_unchecked(i + 1)?;
+                self.set_at_unchecked(i, &element_to_shift)?;
+            }
+        } else {
+            // closer to the head
+            for i in (0..pos).rev() {
+                let element_to_shift = self.get_at_unchecked(i)?;
+                self.set_at_unchecked(i + 1, &element_to_shift)?;
+            }
+            self.set_offset(self.off.overflowing_add(1).0);
+        }
+        self.set_length(self.len - 1);
+        item
+    }
+
     /// Set the length of the collection
     fn set_length(&mut self, len: u32) {
         self.storage.set(LEN_KEY, &len.to_be_bytes());
@@ -217,7 +253,7 @@ where
             item_type: self.item_type,
             serialization_type: self.serialization_type,
             len: self.len,
-            off: self.off
+            off: self.off,
         }
     }
 }
@@ -236,7 +272,7 @@ where
     item_type: PhantomData<*const T>,
     serialization_type: PhantomData<*const Ser>,
     len: u32,
-    off: u32
+    off: u32,
 }
 
 impl<'a, T, S> DequeStore<'a, T, S, Bincode2>
@@ -287,7 +323,7 @@ where
             item_type: PhantomData,
             serialization_type: PhantomData,
             len,
-            off
+            off,
         })
     }
 
@@ -328,9 +364,15 @@ where
     }
 
     fn get_at_unchecked(&self, pos: u32) -> StdResult<T> {
-        let serialized = self.storage.get(&(pos.overflowing_add(self.off).0).to_be_bytes()).ok_or_else(|| {
-            StdError::generic_err(format!("No item in DequeStorage at position {}", pos.overflowing_add(self.off).0))
-        })?;
+        let serialized = self
+            .storage
+            .get(&(pos.overflowing_add(self.off).0).to_be_bytes())
+            .ok_or_else(|| {
+                StdError::generic_err(format!(
+                    "No item in DequeStorage at position {}",
+                    pos.overflowing_add(self.off).0
+                ))
+            })?;
         Ser::deserialize(&serialized)
     }
 }
@@ -349,7 +391,7 @@ where
         Iter {
             storage: self,
             start: 0_u32,
-            end: end
+            end: end,
         }
     }
 }
@@ -367,7 +409,7 @@ where
             item_type: self.item_type,
             serialization_type: self.serialization_type,
             len: self.len,
-            off: self.off
+            off: self.off,
         }
     }
 }
@@ -495,7 +537,7 @@ mod tests {
     fn test_iterator() -> StdResult<()> {
         let mut storage = MockStorage::new();
         let mut deque_store = DequeStoreMut::attach_or_create(&mut storage)?;
-        
+
         deque_store.push_front(&2143)?;
         deque_store.push_back(&3412)?;
         deque_store.push_front(&1234)?;
