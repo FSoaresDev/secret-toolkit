@@ -64,8 +64,7 @@ where
     ///
     /// Returns Err if the contents of the storage can not be parsed.
     pub fn attach_or_create_with_serialization(storage: &'a mut S, _ser: Ser) -> StdResult<Self> {
-        if let Some(len_vec) = storage.get(LEN_KEY) {
-            let off_vec = storage.get(OFFSET_KEY).unwrap();
+        if let (Some(len_vec), Some(off_vec)) = (storage.get(LEN_KEY), (storage.get(OFFSET_KEY))) {
             Self::new(storage, &len_vec, &off_vec)
         } else {
             let len_vec = 0_u32.to_be_bytes();
@@ -173,12 +172,14 @@ where
     /// This operation has a constant cost.
     pub fn push_front(&mut self, item: &T) -> StdResult<()> {
         self.set_offset(self.off.overflowing_sub(1).0);
-        self.set_at_unchecked(0_u32, item)?;
+        self.set_at_unchecked(0, item)?;
         self.set_length(self.len + 1);
         Ok(())
     }
 
     /// Pop the last item off the collection
+    ///
+    /// This operation has a constant cost.
     pub fn pop_back(&mut self) -> StdResult<T> {
         if let Some(len) = self.len.checked_sub(1) {
             let item = self.get_at_unchecked(len);
@@ -190,6 +191,8 @@ where
     }
 
     /// Pop the first item off the collection
+    ///
+    /// This operation has a constant cost.
     pub fn pop_front(&mut self) -> StdResult<T> {
         if let Some(len) = self.len.checked_sub(1) {
             let item = self.get_at_unchecked(0);
@@ -201,35 +204,37 @@ where
         }
     }
 
-    /// Remove element at position provided
+    /// Remove an element off the collection at the position provided
+    ///
+    /// Removing an element from the head (first) or tail (last) has a constant cost.
+    /// Removing from the middle the cost will depend on the proximity to the head or tail.
+    /// In this case, all the elements between the closest tip of the collection (head or tail)
+    /// and the remove position will be shifting positions.
+    ///
+    /// Worst case scenario, in terms of cost, will be if the element position is
+    /// exactly in the middle of the collection.
     pub fn remove(&mut self, pos: u32) -> StdResult<T> {
-        if pos == 0 {
-            // if remove the first element
-            self.pop_front()
-        } else if pos == self.len - 1 {
-            // if remove the last element
-            self.pop_back()
-        } else if pos > 0 && pos < self.len - 1 {
-            // if remove element from the middle
-            let item = self.get_at_unchecked(pos);
-            let to_tail = self.len - pos;
-            if to_tail < pos {
-                // closer to the tail
-                for i in (pos..self.len - 1) {
-                    self.set_at_unchecked(i, &self.get_at_unchecked(i + 1).unwrap());
-                }
-            } else {
-                // closer to the head
-                for i in (0..pos).rev() {
-                    self.set_at_unchecked(i + 1, &self.get_at_unchecked(i).unwrap());
-                }
-                self.set_offset(self.off.overflowing_add(1).0);
-            }
-            self.set_length(self.len - 1);
-            item
-        } else {
-            Err(StdError::generic_err("DequeStorage access out of bounds"))
+        if pos >= self.len {
+            return Err(StdError::generic_err("DequeStorage access out of bounds"));
         }
+        let item = self.get_at_unchecked(pos);
+        let to_tail = self.len - pos;
+        if to_tail < pos {
+            // closer to the tail
+            for i in pos..self.len - 1 {
+                let element_to_shift = self.get_at_unchecked(i + 1)?;
+                self.set_at_unchecked(i, &element_to_shift)?;
+            }
+        } else {
+            // closer to the head
+            for i in (0..pos).rev() {
+                let element_to_shift = self.get_at_unchecked(i)?;
+                self.set_at_unchecked(i + 1, &element_to_shift)?;
+            }
+            self.set_offset(self.off.overflowing_add(1).0);
+        }
+        self.set_length(self.len - 1);
+        item
     }
 
     /// Set the length of the collection
@@ -323,10 +328,6 @@ where
             len,
             off,
         })
-    }
-
-    pub fn off(&self) -> u32 {
-        self.off
     }
 
     pub fn len(&self) -> u32 {
@@ -541,6 +542,28 @@ mod tests {
         deque_store.push_back(&5)?;
         deque_store.push_back(&6)?;
         deque_store.push_front(&1)?;
+        deque_store.push_back(&7)?;
+        deque_store.push_back(&8)?;
+
+        assert!(deque_store.remove(8).is_err());
+        assert!(deque_store.remove(9).is_err());
+
+        assert_eq!(deque_store.remove(7), Ok(8));
+        assert_eq!(deque_store.get_at(6), Ok(7));
+        assert_eq!(deque_store.get_at(5), Ok(6));
+        assert_eq!(deque_store.get_at(4), Ok(5));
+        assert_eq!(deque_store.get_at(3), Ok(4));
+        assert_eq!(deque_store.get_at(2), Ok(3));
+        assert_eq!(deque_store.get_at(1), Ok(2));
+        assert_eq!(deque_store.get_at(0), Ok(1));
+
+        assert_eq!(deque_store.remove(6), Ok(7));
+        assert_eq!(deque_store.get_at(5), Ok(6));
+        assert_eq!(deque_store.get_at(4), Ok(5));
+        assert_eq!(deque_store.get_at(3), Ok(4));
+        assert_eq!(deque_store.get_at(2), Ok(3));
+        assert_eq!(deque_store.get_at(1), Ok(2));
+        assert_eq!(deque_store.get_at(0), Ok(1));
 
         assert_eq!(deque_store.remove(3), Ok(4));
         assert_eq!(deque_store.get_at(4), Ok(6));
